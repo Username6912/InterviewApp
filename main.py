@@ -1,78 +1,33 @@
-from flask import Flask, render_template
-from deepgram import Deepgram
-from dotenv import load_dotenv
-import os
-import asyncio
-from aiohttp import web,WSMsgType
-from aiohttp_wsgi import WSGIHandler
+
+import speech_recognition as sr
 import openai
 
-from typing import Dict, Callable
+r = sr.Recognizer()
+with sr.Microphone() as source:
+    print("Say something!")
+    audio = r.listen(source)
 
 
-load_dotenv()
-
-app = Flask('aioflask')
-
-dg_client = Deepgram('290c078ca912f5139a60ed284b4d2842ec823206')
-
-async def process_audio(fast_socket: web.WebSocketResponse):
-    async def get_transcript(data: Dict) -> None:
-        if 'channel' in data:
-            transcript = data['channel']['alternatives'][0]['transcript']
-            print(transcript)
-        
-            if transcript:
+try:
     
-                    openai.api_key = "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"
-                    response = openai.Completion.create(
-                        engine='davinci',
-                        prompt=transcript,
-                        max_tokens=60,
-                        n=1,
-                        stop=None,
-                        temperature=0.5,
-                    )
-                    message = response.choices[0].text.strip()
-
-                    # Send the response to the Davinci API
-                    await fast_socket.send_str(message)
-
-    deepgram_socket = await connect_to_deepgram(get_transcript)
-    
-    return deepgram_socket
+    print( r.recognize_google(audio,show_all=True)["alternative"][0]["transcript"])
    
+except sr.UnknownValueError:
+    print("Google Speech Recognition could not understand audio")
+except sr.RequestError as e:
+    print("Could not request results from Google Speech Recognition service; {0}".format(e))
 
-async def connect_to_deepgram(transcript_received_handler: Callable[[Dict], None]) -> str:
-    try:
-        socket = await dg_client.transcription.live({'punctuate': True, 'interim_results': False})
-        socket.registerHandler(socket.event.CLOSE, lambda c: print(f'Connection closed with code {c}.'))
-        socket.registerHandler(socket.event.TRANSCRIPT_RECEIVED, transcript_received_handler)
 
-        return socket
-    except Exception as e:
-        raise Exception(f'Could not open socket: {e}')
+openai.api_key = "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"
+response = openai.Completion.create(
+  model="text-davinci-003",
+  prompt=r.recognize_google(audio,show_all=True)["alternative"][0]["transcript"],
+  temperature=0.7,
+  max_tokens=256,
+  top_p=1,
+  frequency_penalty=0,
+  presence_penalty=0
+)
+message = response.choices[0]["text"]
 
-@app.route('/')
-def index():
-    return render_template('index.html')
-
-async def socket(request):
-    ws = web.WebSocketResponse()
-    await ws.prepare(request) 
-
-    deepgram_socket = await process_audio(ws)
-
-    while True:
-        data = await ws.receive_bytes()
-        deepgram_socket.send(data)
-
-  
-
-if __name__ == "__main__":
-    loop = asyncio.get_event_loop()
-    aio_app = web.Application()
-    wsgi = WSGIHandler(app)
-    aio_app.router.add_route('*', '/{path_info: *}', wsgi.handle_request)
-    aio_app.router.add_route('GET', '/listen', socket)
-    web.run_app(aio_app, port=5555)
+print(message)
